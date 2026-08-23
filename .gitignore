@@ -26,13 +26,9 @@ build/
 *.sqlite
 *.sqlite3
 
-# Data files & model weights (generated at runtime)
+# Data files (generated at runtime)
 backend/data/*.csv
 backend/data/*.json
-backend/data/*.pkl
-*.pkl
-!backend/data/.gitkeep
-
 
 # Frontend
 node_modules/
