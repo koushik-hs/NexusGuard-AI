@@ -46,6 +46,7 @@ def list_rings():
             top_evidence_type=top_evidence,
             if_score=ring.get("if_score", 0),
             rule_score=ring.get("rule_score", 0),
+            xgb_score=ring.get("xgb_score"),
         ))
     return sorted(result, key=lambda x: x.risk_score, reverse=True)
 
@@ -100,6 +101,7 @@ def get_ring(ring_id: str):
         evidence_count=ring.get("evidence_count", 0),
         if_score=ring.get("if_score", 0),
         rule_score=ring.get("rule_score", 0),
+        xgb_score=ring.get("xgb_score"),
         features=features,
     )
 

@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ChevronLeft, Network, Brain, AlertCircle,
-  User, Store, Clock, Hash
+  User, Store,
 } from 'lucide-react';
 import { api } from '../api/client';
 import type { RingDetail, InvestigationResponse } from '../api/client';
@@ -10,16 +10,17 @@ import { RiskBadge } from '../components/RiskBadge';
 import { EvidenceCard } from '../components/EvidenceCard';
 
 function ScoreGauge({
-  score, band, ifScore, ruleScore,
+  score, band, ifScore, ruleScore, xgbScore,
 }: {
-  score: number; band: string; ifScore: number; ruleScore: number;
+  score: number; band: string; ifScore: number; ruleScore: number; xgbScore?: number | null;
 }) {
   const COLORS: Record<string, string> = {
-    Critical: '#dc2626', High: '#ea580c', Medium: '#ca8a04', Low: '#16a34a',
+    Critical: '#6b4f3a', High: '#7d6048', Medium: '#987b5e', Low: '#52705a',
   };
-  const color = COLORS[band] || '#2563eb';
+  const color = COLORS[band] || '#6b4f3a';
   const ifPct = Math.min(100, Math.max(0, ifScore * 100));
   const rulePct = Math.min(100, Math.max(0, ruleScore * 100));
+  const xgbPct = xgbScore !== undefined && xgbScore !== null ? Math.min(100, Math.max(0, xgbScore * 100)) : null;
 
   return (
     <div className="score-gauge-wrap">
@@ -27,24 +28,37 @@ function ScoreGauge({
       <div className="score-gauge-info">
         <RiskBadge band={band as any} />
         <span className="text-xs text-muted" style={{ marginTop: 4 }}>Risk Score (0–100)</span>
-        <span className="text-xs text-muted" style={{ marginTop: 2, fontSize: 10 }}>0.40×IF + 0.60×Rules</span>
+        <span className="text-xs text-muted" style={{ marginTop: 2, fontSize: 10 }}>0.35×IF + 0.40×XGB + 0.25×Rules</span>
       </div>
       <div style={{ flex: 1, paddingLeft: 12 }}>
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-            <span className="text-xs text-secondary">Isolation Forest (Anomaly)</span>
-            <span className="text-mono" style={{ fontSize: 12, fontWeight: 600 }}>{ifPct.toFixed(1)}%</span>
+        {xgbPct !== null && (
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+              <span className="text-xs text-secondary">XGBoost (Supervised Signal)</span>
+              <span className="text-mono" style={{ fontSize: 12, fontWeight: 600, color: '#6b4f3a' }}>{xgbPct.toFixed(1)}%</span>
+            </div>
+            <div className="score-bar">
+              <div className="score-bar-fill" style={{
+                width: `${xgbPct}%`, background: '#6b4f3a',
+              }} />
+            </div>
+          </div>
+        )}
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+            <span className="text-xs text-secondary">Isolation Forest (Anomaly Signal)</span>
+            <span className="text-mono" style={{ fontSize: 12, fontWeight: 600, color: '#8a735f' }}>{ifPct.toFixed(1)}%</span>
           </div>
           <div className="score-bar">
             <div className="score-bar-fill" style={{
-              width: `${ifPct}%`, background: 'var(--accent)',
+              width: `${ifPct}%`, background: '#8a735f',
             }} />
           </div>
         </div>
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
             <span className="text-xs text-secondary">Structural Rule Signals</span>
-            <span className="text-mono" style={{ fontSize: 12, fontWeight: 600 }}>{rulePct.toFixed(1)}%</span>
+            <span className="text-mono" style={{ fontSize: 12, fontWeight: 600, color }}>{rulePct.toFixed(1)}%</span>
           </div>
           <div className="score-bar">
             <div className="score-bar-fill" style={{
@@ -58,7 +72,7 @@ function ScoreGauge({
 }
 
 function InvestigationPanel({
-  ringId, investigation, loading, onRun,
+  investigation, loading, onRun,
 }: {
   ringId: string;
   investigation: InvestigationResponse | null;
@@ -229,6 +243,7 @@ export function RingInvestigation() {
               band={ring.risk_band}
               ifScore={ring.if_score || 0}
               ruleScore={ring.rule_score || 0}
+              xgbScore={ring.xgb_score}
             />
           </div>
         </div>

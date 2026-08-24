@@ -1,6 +1,5 @@
-import React from 'react';
-
 type Band = 'Critical' | 'High' | 'Medium' | 'Low';
+import { AnimatedNumber } from './AnimatedNumber';
 
 interface Props {
   band: Band;
@@ -16,10 +15,10 @@ const BAND_CLASS: Record<Band, string> = {
 };
 
 const BAND_DOT: Record<Band, string> = {
-  Critical: '#dc2626',
-  High:     '#ea580c',
-  Medium:   '#ca8a04',
-  Low:      '#16a34a',
+  Critical: '#6b4f3a',
+  High:     '#7d6048',
+  Medium:   '#987b5e',
+  Low:      '#52705a',
 };
 
 export function RiskBadge({ band, score, showScore = false }: Props) {
@@ -36,7 +35,7 @@ export function RiskBadge({ band, score, showScore = false }: Props) {
       {band}
       {showScore && score !== undefined && (
         <span style={{ fontFamily: 'var(--font-mono)', marginLeft: 4 }}>
-          {score.toFixed(0)}
+          <AnimatedNumber value={score} decimals={0} />
         </span>
       )}
     </span>
@@ -49,10 +48,10 @@ interface ScoreBarProps {
 }
 
 const BAND_COLOR: Record<Band, string> = {
-  Critical: '#dc2626',
-  High:     '#ea580c',
-  Medium:   '#ca8a04',
-  Low:      '#16a34a',
+  Critical: '#6b4f3a',
+  High:     '#7d6048',
+  Medium:   '#987b5e',
+  Low:      '#52705a',
 };
 
 export function ScoreBar({ score, band }: ScoreBarProps) {

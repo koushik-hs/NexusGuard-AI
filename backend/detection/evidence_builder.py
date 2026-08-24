@@ -1,4 +1,4 @@
-﻿"""
+"""
 Evidence builder: produces a structured evidence object per flagged ring.
 
 This is the stable interface between the detection engine and everything
@@ -236,10 +236,15 @@ def build_evidence(
         "evidence_count": len(evidence_items),
         "if_score": scored_cluster.get("if_score", 0),
         "rule_score": scored_cluster.get("rule_score", 0),
+        "xgb_score": scored_cluster.get("xgb_score"),
         "features": {
             "cluster_size": scored_cluster["cluster_size"],
             "shared_device_count": scored_cluster["shared_device_count"],
+            "max_accounts_per_shared_device": scored_cluster.get("max_accounts_per_shared_device", 0),
+            "weighted_device_score": scored_cluster.get("weighted_device_score", 0.0),
             "shared_ip_count": scored_cluster["shared_ip_count"],
+            "max_accounts_per_shared_ip": scored_cluster.get("max_accounts_per_shared_ip", 0),
+            "weighted_ip_score": scored_cluster.get("weighted_ip_score", 0.0),
             "internal_txn_density": scored_cluster["internal_txn_density"],
             "reciprocal_txn_count": scored_cluster["reciprocal_txn_count"],
             "has_cycle": scored_cluster["has_cycle"],
@@ -249,6 +254,8 @@ def build_evidence(
             "merchant_concentration": scored_cluster["merchant_concentration"],
             "avg_txn_velocity": scored_cluster["avg_txn_velocity"],
             "creation_time_spread_seconds": scored_cluster["creation_time_spread_seconds"],
+            "creation_sync_ratio": scored_cluster.get("creation_sync_ratio", 0.0),
+            "multi_signal_count": scored_cluster.get("multi_signal_count", 0),
         },
         "graph": {
             "nodes": graph_nodes,

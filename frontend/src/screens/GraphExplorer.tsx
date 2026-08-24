@@ -8,10 +8,10 @@ import { RiskBadge } from '../components/RiskBadge';
 
 // Color scheme for nodes
 const NODE_COLORS: Record<string, string> = {
-  account_merchant: '#1d4ed8',
-  account_buyer:    '#475569',
-  device:           '#b45309',
-  ip_range:         '#0f766e',
+  account_merchant: '#6b4f3a',
+  account_buyer:    '#8a735f',
+  device:           '#a78c6b',
+  ip_range:         '#c9b79c',
 };
 
 const NODE_LABELS: Record<string, string> = {
@@ -23,9 +23,9 @@ const NODE_LABELS: Record<string, string> = {
 
 function nodeColor(node: GraphNode): string {
   if (node.node_type === 'account') {
-    return NODE_COLORS[`account_${node.account_type}`] || '#475569';
+    return NODE_COLORS[`account_${node.account_type}`] || '#8a735f';
   }
-  return NODE_COLORS[node.node_type] || '#334155';
+  return NODE_COLORS[node.node_type] || '#8a735f';
 }
 
 function nodeLabel(node: GraphNode): string {
@@ -112,23 +112,23 @@ export function GraphExplorer() {
     // Border
     ctx.beginPath();
     ctx.arc(node.x!, node.y!, radius, 0, 2 * Math.PI);
-    ctx.strokeStyle = isSelected ? '#fff' : `${color}99`;
+    ctx.strokeStyle = isSelected ? '#faf7f2' : `${color}99`;
     ctx.lineWidth = isSelected ? 2 : 1;
     ctx.stroke();
 
     // Label
     const fontSize = Math.max(10 / globalScale, 2.5);
     ctx.font = `${fontSize}px JetBrains Mono, monospace`;
-    ctx.fillStyle = isSelected ? '#e8edf5' : '#8fa3c0';
+    ctx.fillStyle = isSelected ? '#faf7f2' : '#6b4f3a';
     ctx.textAlign = 'center';
     ctx.fillText(nodeLabel(node as GraphNode), node.x!, node.y! + radius + fontSize + 1);
   }, [selectedNode]);
 
   const linkColor = useCallback((link: FGLink) => {
     if (link.suspicious) {
-      return link.shared_via ? '#dc2626cc' : '#ea580ccc';
+      return link.shared_via ? '#6b4f3acc' : '#7d6048cc';
     }
-    return '#1e2d45';
+    return '#c9b79c';
   }, []);
 
   const linkWidth = useCallback((link: FGLink) => link.suspicious ? 2 : 1, []);
@@ -161,7 +161,7 @@ export function GraphExplorer() {
             linkDirectionalArrowRelPos={1}
             linkCurvature={0.1}
             onNodeClick={handleNodeClick as any}
-            backgroundColor="#0a0f1e"
+            backgroundColor="#faf7f2"
             linkLabel={(link: any) => link.edge_type}
             nodeLabel=""
             cooldownTicks={100}
@@ -179,11 +179,11 @@ export function GraphExplorer() {
             </div>
           ))}
           <div className="legend-item" style={{ marginTop: 4 }}>
-            <div className="legend-line" style={{ background: '#dc2626', borderTop: '2px dashed #dc2626' }} />
+            <div className="legend-line" style={{ background: '#6b4f3a', borderTop: '2px dashed #6b4f3a' }} />
             Suspicious Link
           </div>
           <div className="legend-item">
-            <div className="legend-line" style={{ background: '#1e2d45' }} />
+            <div className="legend-line" style={{ background: '#c9b79c' }} />
             Transaction
           </div>
         </div>

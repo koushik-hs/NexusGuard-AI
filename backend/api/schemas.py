@@ -21,6 +21,7 @@ class GraphNode(BaseModel):
     account_type: Optional[str] = None
     ip_range: Optional[str] = None
     in_ring: bool = True
+    weight: Optional[float] = None
 
 
 class GraphEdge(BaseModel):
@@ -30,6 +31,7 @@ class GraphEdge(BaseModel):
     suspicious: bool = False
     shared_via: Optional[str] = None
     shared_id: Optional[str] = None
+    weight: Optional[float] = None
 
 
 class GraphData(BaseModel):
@@ -50,6 +52,12 @@ class RingFeatures(BaseModel):
     merchant_concentration: float
     avg_txn_velocity: float
     creation_time_spread_seconds: Optional[float] = None
+    creation_sync_ratio: Optional[float] = None
+    max_accounts_per_shared_device: Optional[int] = None
+    max_accounts_per_shared_ip: Optional[int] = None
+    weighted_device_score: Optional[float] = None
+    weighted_ip_score: Optional[float] = None
+    multi_signal_count: Optional[int] = None
 
 
 class RingListItem(BaseModel):
@@ -61,6 +69,7 @@ class RingListItem(BaseModel):
     top_evidence_type: Optional[str] = None
     if_score: float
     rule_score: float
+    xgb_score: Optional[float] = None
 
 
 class RingDetail(BaseModel):
@@ -74,6 +83,7 @@ class RingDetail(BaseModel):
     evidence_count: int
     if_score: float
     rule_score: float
+    xgb_score: Optional[float] = None
     features: RingFeatures
 
 
@@ -82,10 +92,14 @@ class MetricComparison(BaseModel):
     recall: float
     f1: float
     false_positive_rate: float
+    false_negative_rate: Optional[float] = None
     true_positives: int
     false_positives: int
     false_negatives: int
     true_negatives: int
+    pr_auc: Optional[float] = None
+    roc_auc: Optional[float] = None
+    description: Optional[str] = None
 
 
 class RingTypeStats(BaseModel):
@@ -95,6 +109,7 @@ class RingTypeStats(BaseModel):
 
 
 class MetricsResponse(BaseModel):
+    baselines_comparison: Optional[Dict[str, Any]] = None
     graph_aware_detector: MetricComparison
     transaction_only_baseline: MetricComparison
     ring_level: Dict[str, Any]

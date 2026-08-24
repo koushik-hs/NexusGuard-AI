@@ -3,11 +3,20 @@ ML training pipeline with proper train/validation/test split.
 
 Split strategy:
   - Train IF on:  legitimate clusters only (from all data)
-  - Val set:      collusion rings + circular_flow rings (ring_type held back for validation)
-  - Test set:     mixed_signal + remaining circular_flow (held-out ring types)
-  
-This tests whether the model learned transferable structural/behavioral patterns
+  - XGBoost train: shared_device + refund_farming rings + all legitimate clusters
+  - Val set:      collusion + shared_ip rings + legitimate clusters (threshold tuning)
+  - Test set:     mixed_signal + circular_flow rings + legitimate clusters (held-out eval)
+
+This tests whether models learned transferable structural/behavioral patterns
 rather than memorizing specific ring templates.
+
+Models trained:
+  1. Isolation Forest (IF) — anomaly signal, trained on legitimate clusters only
+  2. XGBoost — primary supervised model, trained on labeled train+val clusters
+  3. Random Forest — supervised baseline for comparison
+  
+Hybrid scoring formula:
+  score = 0.35 × IF_normalized + 0.40 × XGB_probability + 0.25 × rule_score_normalized
 
 Run independently:
   cd backend && python -m ml.train
@@ -61,7 +70,7 @@ def load_labeled_clusters():
         G, H, accounts_df, txns_df, acct_devs_df, acct_ips_df
     )
 
-    # Load ground truth
+    # Load ground truth — used ONLY here for supervised training, never in feature extraction
     labels_df = pd.read_csv(os.path.join(DATA_DIR, "labels.csv"))
     acct_to_ring_id   = dict(zip(labels_df["account_id"].astype(str), labels_df["ring_id"].astype(str)))
     acct_to_ring_type = dict(zip(labels_df["account_id"].astype(str), labels_df["ring_type"].astype(str)))
@@ -122,28 +131,75 @@ def train_and_evaluate():
     scaler           = MinMaxScaler()
     scaler.fit(raw_legit_scores.reshape(-1, 1))
 
-    # ── Train supervised Random Forest for comparison ─────────────────────────
-    # Requires labeled data — use all non-test clusters
-    rf_train = train_clusters + val_clusters
-    X_rf  = np.array([c["fv"] for c in rf_train])
-    y_rf  = np.array([1 if c["is_fraud"] else 0 for c in rf_train])
+    # ── Train XGBoost (primary supervised model) ──────────────────────────────
+    # Train on train + val clusters (more data = better generalization)
+    # Test set is held completely out from training AND from XGBoost
+    xgb_train = train_clusters + val_clusters
+    X_xgb = np.array([c["fv"] for c in xgb_train])
+    y_xgb = np.array([1 if c["is_fraud"] else 0 for c in xgb_train])
 
-    if len(set(y_rf)) == 2:  # need both classes
+    clf_xgb = None
+    xgb_feature_importances = []
+
+    if len(set(y_xgb)) == 2:
+        n_pos = int(y_xgb.sum())
+        n_neg = int((y_xgb == 0).sum())
+        # scale_pos_weight: compensates for class imbalance (negative/positive ratio)
+        scale_pos_weight = n_neg / max(n_pos, 1)
+
+        print(f"[ml/train] Training XGBoost on {len(X_xgb)} clusters "
+              f"({n_pos} fraud, {n_neg} legit, scale_pos_weight={scale_pos_weight:.2f})...")
+        try:
+            import xgboost as xgb
+            clf_xgb = xgb.XGBClassifier(
+                n_estimators=300,
+                max_depth=4,
+                learning_rate=0.05,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                scale_pos_weight=scale_pos_weight,
+                use_label_encoder=False,
+                eval_metric="logloss",
+                random_state=RANDOM_SEED,
+                n_jobs=-1,
+            )
+            clf_xgb.fit(X_xgb, y_xgb)
+
+            # Feature importances from XGBoost (gain-based — most reliable)
+            importances = clf_xgb.feature_importances_
+            xgb_feature_importances = sorted(
+                zip(FEATURE_NAMES, importances.tolist()),
+                key=lambda x: x[1], reverse=True
+            )
+            print("[ml/train] Top-10 XGBoost feature importances (gain):")
+            for feat, imp in xgb_feature_importances[:10]:
+                print(f"  {feat:<40}: {imp:.4f}")
+
+        except ImportError:
+            print("[ml/train] WARNING: xgboost not installed — skipping XGBoost training.")
+            clf_xgb = None
+    else:
+        print("[ml/train] WARNING: Only one class in XGBoost training data; skipping XGBoost.")
+
+    # ── Train supervised Random Forest for comparison ─────────────────────────
+    X_rf  = np.array([c["fv"] for c in xgb_train])
+    y_rf  = np.array([1 if c["is_fraud"] else 0 for c in xgb_train])
+
+    clf_rf = None
+    rf_top_features = []
+    if len(set(y_rf)) == 2:
         print(f"[ml/train] Training RF on {len(X_rf)} clusters "
               f"({y_rf.sum()} fraud, {(y_rf==0).sum()} legit)...")
         clf_rf = RandomForestClassifier(n_estimators=200, random_state=RANDOM_SEED,
                                          class_weight="balanced", n_jobs=-1)
         clf_rf.fit(X_rf, y_rf)
 
-        # Feature importances
         importances = dict(zip(FEATURE_NAMES, clf_rf.feature_importances_))
-        top_features = sorted(importances.items(), key=lambda x: x[1], reverse=True)
+        rf_top_features = sorted(importances.items(), key=lambda x: x[1], reverse=True)
         print("[ml/train] Top-10 RF feature importances:")
-        for feat, imp in top_features[:10]:
+        for feat, imp in rf_top_features[:10]:
             print(f"  {feat:<40}: {imp:.4f}")
     else:
-        clf_rf = None
-        top_features = []
         print("[ml/train] WARNING: Only one class in RF training data; skipping RF.")
 
     # ── Threshold calibration on validation set ───────────────────────────────
@@ -152,11 +208,11 @@ def train_and_evaluate():
     print(f"[ml/train] Calibrating threshold on val set: "
           f"{len(val_fraud)} fraud, {len(val_legit)} legit clusters...")
 
-    if val_fraud and val_legit:
-        X_val   = np.array([c["fv"] for c in val_clusters])
-        y_val   = np.array([1 if c["is_fraud"] else 0 for c in val_clusters])
+    best_threshold = 40.0
+    best_f1 = 0.0
 
-        # Compute hybrid scores on val set
+    if val_fraud and val_legit:
+        # Compute hybrid scores on val set using IF + XGB + rules
         val_scores = []
         for c in val_clusters:
             fv_arr  = np.array(c["fv"]).reshape(1, -1)
@@ -164,20 +220,22 @@ def train_and_evaluate():
             if_norm = float(1.0 - scaler.transform([[raw_if]])[0][0])
             if_norm = max(0.0, min(1.0, if_norm))
             rule    = _rule_score(c["features"])
-            hybrid  = (0.40 * if_norm + 0.60 * rule) * 100
+
+            if clf_xgb is not None:
+                xgb_prob = float(clf_xgb.predict_proba(fv_arr)[0][1])
+                hybrid   = (0.35 * if_norm + 0.40 * xgb_prob + 0.25 * rule) * 100
+            else:
+                hybrid   = (0.40 * if_norm + 0.60 * rule) * 100
+
             val_scores.append(hybrid)
 
         # Find threshold maximizing F1 on validation set
-        best_f1, best_threshold = 0.0, 40.0
         for thresh in np.arange(20, 80, 2):
             flagged = set(val_clusters[i]["cluster_id"] for i, s in enumerate(val_scores)
                           if s >= thresh)
-            tp = sum(1 for i, c in enumerate(val_clusters)
-                     if c["is_fraud"] and c["cluster_id"] in flagged)
-            fp = sum(1 for i, c in enumerate(val_clusters)
-                     if not c["is_fraud"] and c["cluster_id"] in flagged)
-            fn = sum(1 for i, c in enumerate(val_clusters)
-                     if c["is_fraud"] and c["cluster_id"] not in flagged)
+            tp = sum(1 for c in val_clusters if c["is_fraud"] and c["cluster_id"] in flagged)
+            fp = sum(1 for c in val_clusters if not c["is_fraud"] and c["cluster_id"] in flagged)
+            fn = sum(1 for c in val_clusters if c["is_fraud"] and c["cluster_id"] not in flagged)
             prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
             rec  = tp / (tp + fn) if (tp + fn) > 0 else 0.0
             f1   = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
@@ -186,7 +244,6 @@ def train_and_evaluate():
 
         print(f"[ml/train] Best validation threshold: {best_threshold} (F1={best_f1:.4f})")
     else:
-        best_threshold = 40.0
         print("[ml/train] Insufficient val data for calibration; using default threshold=40")
 
     # ── Evaluate on held-out test set ─────────────────────────────────────────
@@ -202,7 +259,13 @@ def train_and_evaluate():
         if_norm = float(1.0 - scaler.transform([[raw_if]])[0][0])
         if_norm = max(0.0, min(1.0, if_norm))
         rule    = _rule_score(c["features"])
-        hybrid  = (0.40 * if_norm + 0.60 * rule) * 100
+
+        if clf_xgb is not None:
+            xgb_prob = float(clf_xgb.predict_proba(fv_arr)[0][1])
+            hybrid   = (0.35 * if_norm + 0.40 * xgb_prob + 0.25 * rule) * 100
+        else:
+            hybrid   = (0.40 * if_norm + 0.60 * rule) * 100
+
         test_hybrid_scores.append(hybrid)
 
     test_labels  = [1 if c["is_fraud"] else 0 for c in test_clusters]
@@ -233,11 +296,23 @@ def train_and_evaluate():
             "tp": int(tp), "fp": int(fp), "fn": int(fn), "tn": int(tn),
             "held_out_ring_types": list(TEST_RING_TYPES),
         },
-        "feature_importances": [{"feature": f, "importance": float(round(i, 6))}
-                                  for f, i in top_features],
+        "xgb_feature_importances": [
+            {"feature": f, "importance": float(round(i, 6))}
+            for f, i in xgb_feature_importances
+        ],
+        "rf_feature_importances": [
+            {"feature": f, "importance": float(round(i, 6))}
+            for f, i in rf_top_features
+        ],
+        # Legacy key for backward compat
+        "feature_importances": [
+            {"feature": f, "importance": float(round(i, 6))}
+            for f, i in rf_top_features
+        ],
         "train_ring_types": list(TRAIN_RING_TYPES),
         "val_ring_types":   list(VAL_RING_TYPES),
         "test_ring_types":  list(TEST_RING_TYPES),
+        "hybrid_formula": "0.35×IF + 0.40×XGB + 0.25×rules (falls back to 0.40×IF + 0.60×rules if XGB unavailable)",
     }
 
     ml_path = os.path.join(DATA_DIR, "ml_artifacts.json")
@@ -245,13 +320,20 @@ def train_and_evaluate():
         json.dump(ml_artifacts, f, indent=2)
     print(f"[ml/train] ML artifacts saved to {ml_path}")
 
-    # Also save the trained IF model (same path as production)
+    # Save all three trained models
     with open(os.path.join(MODEL_DIR, "if_model.pkl"), "wb") as f:
         pickle.dump({"model": clf_if, "scaler": scaler}, f)
+    print("[ml/train] IF model saved.")
+
+    if clf_xgb is not None:
+        with open(os.path.join(MODEL_DIR, "xgb_model.pkl"), "wb") as f:
+            pickle.dump(clf_xgb, f)
+        print("[ml/train] XGBoost model saved.")
+
     if clf_rf is not None:
         with open(os.path.join(MODEL_DIR, "rf_model.pkl"), "wb") as f:
             pickle.dump(clf_rf, f)
-    print("[ml/train] Models saved.")
+        print("[ml/train] RF model saved.")
 
     return ml_artifacts
 

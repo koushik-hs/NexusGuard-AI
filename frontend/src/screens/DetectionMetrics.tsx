@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BarChart2, AlertCircle, CheckCircle, TrendingUp, Shield, Layers, Award } from 'lucide-react';
 import { api } from '../api/client';
 import type { MetricsResponse, MetricBand, BaselinesResponse } from '../api/client';
@@ -7,11 +7,12 @@ import { MetricCard } from '../components/MetricCard';
 function pct(v: number) { return `${(v * 100).toFixed(1)}%`; }
 function fmt(v: number | undefined) { return v !== undefined ? pct(v) : '—'; }
 
-// ── 4-Baseline comparison table ────────────────────────────────────────────────
+// ── 5-Baseline comparison table ────────────────────────────────────────────────
 const BASELINE_COLS: Array<{ key: keyof BaselinesResponse; label: string; accent?: boolean }> = [
   { key: 'baseline_1_txn_only',  label: 'BL1: Txn-Only' },
   { key: 'baseline_2_rule_only', label: 'BL2: Rule-Only' },
   { key: 'baseline_3_if_only',   label: 'BL3: IF-Only' },
+  { key: 'baseline_4_xgb_only',  label: 'BL4: XGBoost' },
   { key: 'final_hybrid',         label: 'Final: Hybrid', accent: true },
 ];
 
@@ -84,7 +85,7 @@ function BaselineTable({ data }: { data: BaselinesResponse }) {
             );
           })}
           {/* Row separator */}
-          <tr><td colSpan={5} style={{ padding: 0, borderTop: '1px solid rgba(255,255,255,0.06)' }} /></tr>
+          <tr><td colSpan={6} style={{ padding: 0, borderTop: '1px solid rgba(255,255,255,0.06)' }} /></tr>
           {/* Counts */}
           {(['true_positives','false_positives','false_negatives'] as const).map(k => (
             <tr key={k}>

@@ -1,5 +1,3 @@
-import React from 'react';
-
 interface Props {
   label: string;
   value: string | number;
@@ -22,9 +20,10 @@ export function MetricCard({ label, value, sub, accent, large }: Props) {
           color: accent ? 'var(--accent)' : 'var(--text-primary)',
         }}
       >
-        {value}
+        {typeof value === 'number' ? <AnimatedNumber value={value} decimals={Number.isInteger(value) ? 0 : 1} /> : value}
       </div>
       {sub && <div className="metric-sub">{sub}</div>}
     </div>
   );
 }
+import { AnimatedNumber } from './AnimatedNumber';

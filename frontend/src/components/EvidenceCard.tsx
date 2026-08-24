@@ -1,7 +1,7 @@
-import React from 'react';
+import type React from 'react';
 import {
   Monitor, Wifi, RefreshCw, GitBranch, Users,
-  Clock, TrendingUp, AlertCircle, Zap,
+  Clock, TrendingUp, AlertCircle,
 } from 'lucide-react';
 import type { EvidenceItem } from '../api/client';
 
@@ -16,13 +16,13 @@ const EVIDENCE_ICONS: Record<string, React.ElementType> = {
 };
 
 const EVIDENCE_COLORS: Record<string, string> = {
-  shared_device:           '#dc2626',
-  shared_ip:               '#ea580c',
-  refund_ratio:            '#ca8a04',
-  circular_flow:           '#9333ea',
-  transaction_concentration: '#0f766e',
-  temporal_sync:           '#0369a1',
-  high_velocity:           '#be185d',
+  shared_device:           '#6b4f3a',
+  shared_ip:               '#7d6048',
+  refund_ratio:            '#987b5e',
+  circular_flow:           '#8a735f',
+  transaction_concentration: '#a78c6b',
+  temporal_sync:           '#c9b79c',
+  high_velocity:           '#6b4f3a',
 };
 
 interface Props {
@@ -31,7 +31,7 @@ interface Props {
 
 export function EvidenceCard({ item }: Props) {
   const Icon = EVIDENCE_ICONS[item.type] || AlertCircle;
-  const color = EVIDENCE_COLORS[item.type] || '#2563eb';
+  const color = EVIDENCE_COLORS[item.type] || '#6b4f3a';
   const label = item.type.replace(/_/g, ' ');
 
   return (

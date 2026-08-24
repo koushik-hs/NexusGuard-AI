@@ -41,10 +41,16 @@ def _template_investigation(evidence: Dict[str, Any]) -> str:
     accounts   = evidence.get("accounts", [])
     ev_items   = evidence.get("evidence", [])
     features   = evidence.get("features", {})
+    xgb_score  = evidence.get("xgb_score")
+    if_score   = evidence.get("if_score", 0)
+    rule_score = evidence.get("rule_score", 0)
+    
+    score_breakdown = f"XGBoost: {f'{xgb_score:.1%}' if xgb_score is not None else 'N/A'} | Isolation Forest: {if_score:.1%} | Structural Rules: {rule_score:.1%}"
 
     lines = [
         f"## Investigation Report — Ring {ring_id}",
         f"**Risk Band:** {risk_band}  |  **Risk Score:** {risk_score}/100",
+        f"**Model Breakdown:** {score_breakdown}",
         "",
         "### Summary",
         (f"This cluster of {len(accounts)} accounts ({', '.join(accounts[:6])}"
@@ -126,6 +132,9 @@ def _build_llm_prompt(evidence: Dict[str, Any]) -> str:
         "ring_id":      evidence.get("ring_id"),
         "risk_score":   evidence.get("risk_score"),
         "risk_band":    evidence.get("risk_band"),
+        "xgb_score":    evidence.get("xgb_score"),
+        "if_score":     evidence.get("if_score"),
+        "rule_score":   evidence.get("rule_score"),
         "accounts":     evidence.get("accounts"),
         "account_count": evidence.get("account_count"),
         "evidence":     evidence.get("evidence"),

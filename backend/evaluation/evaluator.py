@@ -1,15 +1,15 @@
 """
-Evaluation module — v2.
+Evaluation module — v3.
 
 Computes:
   Baseline 1: Transaction-only anomaly model (no graph signal)
   Baseline 2: Rule-only graph detector (deterministic structural rules, no ML)
   Baseline 3: IF-only graph detector (ML anomaly score, no rules)
-  Final:      Hybrid graph-aware detector (0.40 × IF + 0.60 × rules)
+  Baseline 4: XGBoost-only graph detector (supervised ML, if trained)
+  Final:      Hybrid graph-aware detector (0.35×IF + 0.40×XGB + 0.25×rules, or 0.40×IF + 0.60×rules if no XGB)
 
 All baselines evaluated on the SAME population (all accounts/clusters).
-Threshold for Baselines 2/3 selected to match the hybrid model's flag threshold
-for fair comparison.
+Threshold for Baselines 2/3/4 selected to match or be comparable to the hybrid model's flag threshold.
 
 Additionally reports:
   - PR-AUC and ROC-AUC for the hybrid detector
@@ -25,6 +25,7 @@ No placeholder numbers. No invented values.
 
 import os
 import json
+import pickle
 from typing import Dict, List, Any, Set, Tuple
 
 import numpy as np
@@ -38,8 +39,9 @@ DATA_DIR  = os.path.join(os.path.dirname(__file__), "..", "data")
 EVAL_PATH = os.path.join(DATA_DIR, "evaluation_results.json")
 
 FLAG_THRESHOLD       = 40.0
-RULE_ONLY_THRESHOLD  = 25.0   # lower threshold for rule-only (rules alone max ~60)
-IF_ONLY_THRESHOLD    = 55.0   # IF anomaly scores are noisier without rule grounding
+RULE_ONLY_THRESHOLD  = 25.0
+IF_ONLY_THRESHOLD    = 55.0
+XGB_ONLY_THRESHOLD   = 0.40   # XGBoost outputs probabilities in [0,1]
 RANDOM_SEED          = 42
 PLATFORM_REFUND_RATE = 0.03
 
@@ -88,7 +90,7 @@ def _metrics(tp: int, fp: int, fn: int, tn: int) -> Dict[str, float]:
 # ── Rule-score re-implementation (standalone, for Baseline 2) ─────────────────
 
 def _rule_score_from_cluster(c: Dict[str, Any]) -> float:
-    """Compute rule score from a cluster dict (mirrors scorer._rule_score v2)."""
+    """Compute rule score from a cluster dict (mirrors scorer._rule_score v3)."""
     n       = c.get("cluster_size", 1)
     score   = 0.0
     max_dev = c.get("max_accounts_per_shared_device", 0)
@@ -122,7 +124,6 @@ def _rule_score_from_cluster(c: Dict[str, Any]) -> float:
     if max_dev < 2 and max_ip < 2 and not c.get("has_cycle"):
         score = min(score, 0.35)
     return min(score, 1.0)
-
 
 
 # ── Transaction-only baseline feature extraction ───────────────────────────────
@@ -212,7 +213,7 @@ def evaluate() -> Dict[str, Any]:
             benign_by_type.setdefault(btype, set()).add(str(row["account_id"]))
     all_benign_overlap: Set[str] = set().union(*benign_by_type.values()) if benign_by_type else set()
 
-    # ── Baseline 4 (Final): Hybrid graph-aware detector ──────────────────────
+    # ── Baseline 5 (Final): Hybrid graph-aware detector ──────────────────────
     detected_accounts: Set[str] = set()
     for ring in detected_rings:
         for aid in ring["accounts"]:
@@ -225,7 +226,6 @@ def evaluate() -> Dict[str, Any]:
     hybrid_metrics = _metrics(len(TP4), len(FP4), len(FN4), len(TN4))
 
     # PR-AUC / ROC-AUC from cluster-level scores propagated to accounts
-    # Each account gets the risk_score of the cluster it belongs to (0 if unclustered)
     acct_to_score: Dict[str, float] = {}
     for c in all_clusters:
         score = float(c.get("risk_score", 0.0))
@@ -237,6 +237,14 @@ def evaluate() -> Dict[str, Any]:
 
     pr_auc  = average_precision_score(y_true, y_score_hybrid)
     roc_auc = roc_auc_score(y_true, y_score_hybrid)
+
+    # Determine if XGBoost was used in this run
+    hybrid_description = "Hybrid"
+    uses_xgb = any("xgb_score" in c for c in all_clusters)
+    if uses_xgb:
+        hybrid_description = "Hybrid 0.35×IF + 0.40×XGB + 0.25×rules (threshold=40)"
+    else:
+        hybrid_description = "Hybrid 0.40×IF + 0.60×rules (threshold=40) — XGB not available"
 
     # ── Baseline 1: Transaction-only anomaly model ────────────────────────────
     print("[evaluator] Computing Baseline 1 (transaction-only)...")
@@ -259,7 +267,7 @@ def evaluate() -> Dict[str, Any]:
     bl1_FN = gt_fraud_accounts - bl1_flagged
     bl1_TN = legit_accounts    - bl1_flagged
     bl1_metrics = _metrics(len(bl1_TP), len(bl1_FP), len(bl1_FN), len(bl1_TN))
-    bl1_pr_auc  = average_precision_score(y_true, [-s for s in bl1_scores])  # lower=anomalous
+    bl1_pr_auc  = average_precision_score(y_true, [-s for s in bl1_scores])
 
     # ── Baseline 2: Rule-only graph detector ─────────────────────────────────
     print("[evaluator] Computing Baseline 2 (rule-only)...")
@@ -297,6 +305,49 @@ def evaluate() -> Dict[str, Any]:
     y_score_if   = [acct_to_if_score.get(a, 0.0) for a in all_acct_list]
     bl3_pr_auc   = average_precision_score(y_true, y_score_if)
 
+    # ── Baseline 4: XGBoost-only graph detector ───────────────────────────────
+    print("[evaluator] Computing Baseline 4 (XGBoost-only graph)...")
+    xgb_metrics = None
+    bl4_pr_auc  = None
+    y_score_xgb = None
+
+    xgb_path = os.path.join(DATA_DIR, "xgb_model.pkl")
+    if os.path.exists(xgb_path):
+        try:
+            with open(xgb_path, "rb") as f:
+                clf_xgb = pickle.load(f)
+
+            from detection.feature_extractor import feature_vector as fv_fn
+            acct_to_xgb_score: Dict[str, float] = {}
+            for c in all_clusters:
+                members = c.get("members", [])
+                if not members:
+                    continue
+                try:
+                    fv_arr = np.array(fv_fn(c)).reshape(1, -1)
+                    xgb_prob = float(clf_xgb.predict_proba(fv_arr)[0][1])
+                except Exception:
+                    xgb_prob = 0.0
+                for aid in members:
+                    acct_to_xgb_score[str(aid)] = max(
+                        acct_to_xgb_score.get(str(aid), 0.0), xgb_prob
+                    )
+
+            bl4_flagged: Set[str] = {a for a, s in acct_to_xgb_score.items()
+                                      if s >= XGB_ONLY_THRESHOLD}
+            bl4_TP = bl4_flagged & gt_fraud_accounts
+            bl4_FP = bl4_flagged & legit_accounts
+            bl4_FN = gt_fraud_accounts - bl4_flagged
+            bl4_TN = legit_accounts    - bl4_flagged
+            xgb_metrics = _metrics(len(bl4_TP), len(bl4_FP), len(bl4_FN), len(bl4_TN))
+            y_score_xgb = [acct_to_xgb_score.get(a, 0.0) for a in all_acct_list]
+            bl4_pr_auc  = average_precision_score(y_true, y_score_xgb)
+
+        except Exception as e:
+            print(f"[evaluator] XGBoost baseline skipped: {e}")
+    else:
+        print("[evaluator] XGBoost model not found — skipping Baseline 4.")
+
     # ── Ring-level evaluation (hybrid detector) ───────────────────────────────
     ring_level = _ring_level_eval(detected_rings, gt_ring_accounts, ring_type_map)
 
@@ -314,19 +365,34 @@ def evaluate() -> Dict[str, Any]:
         }
 
     # ── Build results ─────────────────────────────────────────────────────────
-    results = {
-        "baselines_comparison": {
-            "baseline_1_txn_only": {**bl1_metrics, "pr_auc": round(bl1_pr_auc, 4),
-                                     "description": "Transaction-only IF (no graph signal)"},
-            "baseline_2_rule_only": {**bl2_metrics, "pr_auc": round(bl2_pr_auc, 4),
-                                      "description": f"Rule-only graph detector (threshold={RULE_ONLY_THRESHOLD})"},
-            "baseline_3_if_only": {**bl3_metrics, "pr_auc": round(bl3_pr_auc, 4),
-                                    "description": f"IF-only graph detector (threshold={IF_ONLY_THRESHOLD})"},
-            "final_hybrid": {**hybrid_metrics, "pr_auc": round(pr_auc, 4),
-                              "roc_auc": round(roc_auc, 4),
-                              "description": "Hybrid 0.40×IF + 0.60×rules (threshold=40)"},
+    baselines = {
+        "baseline_1_txn_only": {
+            **bl1_metrics, "pr_auc": round(bl1_pr_auc, 4),
+            "description": "Transaction-only IF (no graph signal)",
         },
-        # Legacy keys — kept for API / frontend backward compatibility
+        "baseline_2_rule_only": {
+            **bl2_metrics, "pr_auc": round(bl2_pr_auc, 4),
+            "description": f"Rule-only graph detector (threshold={RULE_ONLY_THRESHOLD})",
+        },
+        "baseline_3_if_only": {
+            **bl3_metrics, "pr_auc": round(bl3_pr_auc, 4),
+            "description": f"IF-only graph detector (threshold={IF_ONLY_THRESHOLD})",
+        },
+        "final_hybrid": {
+            **hybrid_metrics, "pr_auc": round(pr_auc, 4),
+            "roc_auc": round(roc_auc, 4),
+            "description": hybrid_description,
+        },
+    }
+    if xgb_metrics is not None:
+        baselines["baseline_4_xgb_only"] = {
+            **xgb_metrics, "pr_auc": round(bl4_pr_auc, 4),
+            "description": f"XGBoost-only graph detector (threshold={XGB_ONLY_THRESHOLD})",
+        }
+
+    results = {
+        "baselines_comparison": baselines,
+        # Legacy keys for API/frontend backward compatibility
         "graph_aware_detector": {**hybrid_metrics, "pr_auc": round(pr_auc, 4), "roc_auc": round(roc_auc, 4)},
         "transaction_only_baseline": bl1_metrics,
         "ring_level": ring_level,
@@ -335,9 +401,11 @@ def evaluate() -> Dict[str, Any]:
             "flagged_benign_overlap_accounts": len(fp_benign_overall),
             "benign_overlap_fpr":              round(fpr_benign_overall, 4),
             "by_type":                         fp_by_type,
-            "note": ("FP rate on deliberately-injected benign overlap cases. "
-                     "These share infrastructure signals but are NOT fraud. "
-                     "A good system should have low FPR here."),
+            "note": (
+                "FP rate on deliberately-injected benign overlap cases. "
+                "These share infrastructure signals but are NOT fraud. "
+                "A good system should have low FPR here."
+            ),
         },
         "data_summary": {
             "total_accounts":          len(all_accounts),
@@ -345,6 +413,7 @@ def evaluate() -> Dict[str, Any]:
             "legitimate_accounts":     len(legit_accounts),
             "benign_overlap_accounts": len(all_benign_overlap),
             "rings_flagged_by_detector": len(detected_rings),
+            "xgboost_used": uses_xgb,
         },
         "disclaimer": (
             "Dataset is 100% synthetic. Results demonstrate detection methodology "
@@ -359,15 +428,17 @@ def evaluate() -> Dict[str, Any]:
     print("\n" + "="*70)
     print("  EVALUATION RESULTS  (all metrics from actual code execution)")
     print("="*70)
-    print(f"\n  {'Metric':<28} {'BL1:TxnOnly':>12} {'BL2:RuleOnly':>12} {'BL3:IFOnly':>12} {'Final:Hybrid':>12}")
-    print(f"  {'-'*28} {'-'*12} {'-'*12} {'-'*12} {'-'*12}")
+    bl4_m = baselines.get("baseline_4_xgb_only", {})
+    print(f"\n  {'Metric':<28} {'BL1:TxnOnly':>11} {'BL2:RuleOnly':>12} {'BL3:IFOnly':>10} {'BL4:XGBOnly':>11} {'Final:Hybrid':>12}")
+    print(f"  {'-'*28} {'-'*11} {'-'*12} {'-'*10} {'-'*11} {'-'*12}")
     for key in ("precision", "recall", "f1", "false_positive_rate", "pr_auc"):
         row = [
             f"  {key:<28}",
-            f"{bl1_metrics.get(key, results['baselines_comparison']['baseline_1_txn_only'].get(key, 0)):>12.4f}",
-            f"{bl2_metrics.get(key, results['baselines_comparison']['baseline_2_rule_only'].get(key, 0)):>12.4f}",
-            f"{bl3_metrics.get(key, results['baselines_comparison']['baseline_3_if_only'].get(key, 0)):>12.4f}",
-            f"{hybrid_metrics.get(key, results['baselines_comparison']['final_hybrid'].get(key, 0)):>12.4f}",
+            f"{bl1_metrics.get(key, baselines['baseline_1_txn_only'].get(key, 0)):>11.4f}",
+            f"{bl2_metrics.get(key, baselines['baseline_2_rule_only'].get(key, 0)):>12.4f}",
+            f"{bl3_metrics.get(key, baselines['baseline_3_if_only'].get(key, 0)):>10.4f}",
+            f"{bl4_m.get(key, float('nan')):>11.4f}" if bl4_m else f"{'N/A':>11}",
+            f"{hybrid_metrics.get(key, baselines['final_hybrid'].get(key, 0)):>12.4f}",
         ]
         print("".join(row))
     print(f"\n  Ring-Level Recall: {ring_level['overall_ring_recall']:.4f}  "

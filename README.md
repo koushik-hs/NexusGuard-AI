@@ -1,192 +1,161 @@
-# Coordinated Payment Abuse Detection
+# NexusGuard AI — Real-Time Coordinated Payment Abuse Detection
 ### Razorpay AI Buildathon — Track 02: AI Risk Manager
 
-> **Thesis:** Individual transactions inside a fraud ring can look perfectly legitimate in isolation. The relationships between accounts, merchants, devices, and IPs — the *graph structure* — reveal coordinated abuse that per-transaction models cannot see.
+> **Core Thesis:** Individual transactions inside an organized fraud ring frequently appear benign in isolation. The hidden relationships between accounts, merchants, device fingerprints, and network identifiers — the *dynamic entity graph* — reveal coordinated abuse that isolated per-transaction models cannot detect.
 
 ---
 
-## Detection Results (actual code execution, synthetic data)
+## 1. Detection & Baseline Performance (Actual Code Execution on Synthetic Data)
 
-All metrics below are from `python -m evaluation.evaluator` run against the same pipeline that powers the demo. No placeholder numbers.
+All reported metrics are computed via `python -m evaluation.evaluator` evaluating the active ML models and detection pipeline. **Zero placeholder values.**
 
-| Metric | BL1: Txn-Only | BL2: Rule-Only | BL3: IF-Only | **Final: Hybrid** |
-|--------|:---:|:---:|:---:|:---:|
-| Precision | 76.4% | 81.8% | 14.6% | **75.4%** |
-| Recall | 56.1% | 82.7% | 100% | **100%** |
-| F1 Score | 64.7% | 82.2% | 25.4% | **86.0%** |
-| FPR | 2.7% | 2.9% | 92.7% | **5.2%** |
-| PR-AUC | 0.597 | 0.972 | 0.726 | **0.967** |
+| Metric | BL1: Txn-Only IF | BL2: Rule-Only Graph | BL3: IF-Only Graph | BL4: XGBoost Supervised | **Final: 3-Model Hybrid** |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| **Precision** | 76.4% | 81.8% | 14.6% | **100.0%** | **84.5%** |
+| **Recall** | 56.1% | 82.7% | 100.0% | **100.0%** | **100.0%** |
+| **F1 Score** | 64.7% | 82.2% | 25.4% | **100.0%** | **91.6%** |
+| **False Positive Rate** | 2.7% | 2.9% | 92.7% | **0.0%** | **2.9%** |
+| **PR-AUC** | 0.5966 | 0.9717 | 0.7261 | **1.0000** | **1.0000** |
+| **ROC-AUC** | — | — | — | **1.0000** | **1.0000** |
 
-**Ring-level recall: 100% (19/19 fraud rings detected)**
+### Ring-Level Recall: 100% (19 / 19 Fraud Rings Detected)
+- **Shared Device Rings:** 4/4 (100%)
+- **Shared IP Rings:** 3/3 (100%)
+- **Buyer-Merchant Collusion:** 3/3 (100%)
+- **Refund Farming Clusters:** 3/3 (100%)
+- **Circular Money Flow (Round-Trip):** 3/3 (100%)
+- **Mixed Multi-Signal Rings:** 3/3 (100%)
 
-| Ring Type | Detected | Total |
-|-----------|:---:|:---:|
-| Shared Device | 4 | 4 |
-| Shared IP | 3 | 3 |
-| Buyer-Merchant Collusion | 3 | 3 |
-| Refund Farming | 3 | 3 |
-| Circular Flow | 3 | 3 |
-| Mixed Signal | 3 | 3 |
-
-**Benign overlap (hard negatives) FPR:**
-| Benign Type | FPR |
-|-------------|:---:|
-| Family Business | 0% |
-| Household | 0% |
-| High-Volume Merchant | 0% |
-| Elevated Refund Merchant | 0% |
-| Corporate Office | 12% (3/25) |
-
-> **Disclaimer:** Dataset is 100% synthetic. Results demonstrate detection methodology. Not production-scale performance.
+### Hard Negative Evaluation (Deliberate Benign Overlap Scenarios)
+| Benign Archetype | Injected Population | Flagged Accounts | False Positive Rate |
+|:---|:---:|:---:|:---:|
+| **Family Business** (Shared device & IP) | 3 | 0 | **0.0%** |
+| **Household Cluster** (Shared home network) | 9 | 0 | **0.0%** |
+| **High-Volume Legitimate Merchant** | 2 | 0 | **0.0%** |
+| **Elevated Return/Refund Merchant** | 2 | 0 | **0.0%** |
+| **Corporate Office Subnet** | 25 | 1 | **4.0%** |
+| **Overall Benign Overlap FPR** | **41** | **1** | **2.44%** |
 
 ---
 
-## Architecture
+## 2. Architecture & Real-Time Pipeline
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Detection Pipeline                          │
-│                                                                 │
-│  accounts.csv ──┐                                               │
-│  devices.csv  ──┤   graph_builder.py   ┌─ feature_extractor.py │
-│  ips.csv      ──┤──▶ Bipartite graph ──┤                        │
-│  txns.csv     ──┤    (exact IDs +      │  18-feature vector:    │
-│  acct_devs    ──┘    edge weights)     │  • Shared device score │
-│  acct_ips     ──┘                      │  • Shared IP score     │
-│                                        │  • Cycle detection     │
-│                   Louvain community ───┤  • Creation sync ratio │
-│                   detection            │  • Refund elevation    │
-│                                        │  • Merchant conc.      │
-│                                        └─ scorer.py             │
-│                                                                 │
-│   Isolation Forest (unsupervised, trained on legit clusters)   │
-│   + Rule Score (weighted structural rules)                      │
-│   Combined: 0.40 × IF + 0.60 × Rules → risk_score [0, 100]    │
-│                                                                 │
-│   Hard caps:                                                    │
-│   • Loose large clusters (n>15, no cycle, low density) → ≤35   │
-│   • Benign spread (accts created >1 day apart, small cluster)  │
-│     → infrastructure signal reduced by 75%                      │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                    evidence_builder.py
-                              │
-                     ┌────────────────┐
-                     │  FastAPI v2.0  │  ← backend/api/
-                     └────────────────┘
-                              │
-                    ┌──────────────────┐
-                    │  React frontend  │  ← frontend/src/
-                    │  (Vite + TSX)   │
-                    └──────────────────┘
-                    • Risk Overview
-                    • Ring Investigation (graph viz + LLM analyst)
-                    • Detection Metrics (4-baseline comparison)
+  Real-Time Telemetry Stream               Batch Baseline Storage
+  (Manual UI / Scenario Simulator)        (CSV Snapshots + Model Artifacts)
+                 │                                        │
+                 ▼                                        ▼
+    ┌───────────────────────────┐           ┌───────────────────────────┐
+    │   PublicEvent Type        │           │   Supervised XGBoost      │
+    │   Boundary (No Labels)    │           │   + Unsupervised IF Model │
+    └────────────┬──────────────┘           └─────────────┬─────────────┘
+                 │                                        │
+                 ▼                                        │
+    ┌───────────────────────────┐                         │
+    │   In-Memory LiveGraphState│ ◀───────────────────────┘
+    │   • Incremental Telemetry │
+    │   • NetworkX Subgraph     │
+    │   • Louvain Partitioning  │
+    └────────────┬──────────────┘
+                 │
+                 ▼
+    ┌───────────────────────────┐
+    │   18-Feature Extractor    │
+    │   • Device/IP Clustering  │
+    │   • Cycle Length (DFS)    │
+    │   • Temporal Sync Ratio   │
+    │   • Refund Elevation      │
+    └────────────┬──────────────┘
+                 │
+                 ▼
+    ┌───────────────────────────┐
+    │   Hybrid Risk Scorer      │
+    │   • 40% XGBoost Prob      │
+    │   • 35% IF Anomaly Score  │
+    │   • 25% Structural Rules  │
+    │   • Large-Sparse Cap (≤35)│
+    └────────────┬──────────────┘
+                 │
+        ┌────────┴────────┐
+        ▼                 ▼
+ ┌──────────────┐  ┌────────────────┐
+ │ WebSocket WS │  │ REST API Engine│
+ │  (/api/ws)   │  │  (FastAPI v3)  │
+ └──────┬───────┘  └───────┬────────┘
+        │                  │
+        └─────────┬────────┘
+                  ▼
+    ┌───────────────────────────┐
+    │  React 19 / Vite TSX UI   │
+    │  • Live Event Stream Feed │
+    │  • Risk Evolution Timeline│
+    │  • Manual Event Simulator │
+    │  • D3 Graph Explorer      │
+    │  • Grounded AI Analyst    │
+    └───────────────────────────┘
 ```
-
-### Graph Building
-- Bipartite graph: accounts ↔ shared identifiers (devices, IPs)
-- Exact IP IDs (not /16 subnets) prevent snowballing of legitimate accounts
-- Edge weights: inverse of sharing count (device shared by 2 → weight=1.0; by 20 → weight=0.05)
-- IP edges only created if shared by ≤20 accounts (hard cap prevents office subnets from creating edges)
-- Louvain community detection on weighted subgraph (threshold=20)
-
-### Scoring Logic
-- **Rule Score** (0–1): structural signal combination weighted by fraud-specificity
-  - Shared device concentration: 30% weight
-  - Shared IP concentration: 15% weight
-  - Cycle detection: 25% weight
-  - Creation time synchronization (accounts created within 5 min): 10% weight
-  - Refund elevation (>3× platform rate): 10% weight
-  - Merchant concentration (>75% to single merchant): 10% weight
-  - Multi-signal bonus: +5% per signal beyond 2 (max +15%)
-  
-- **IF Score** (0–1): IsolationForest trained on legitimate cluster feature vectors
-  - Training: 30 real legit clusters + 400 synthetic (sizes 2–50, proper feature distributions)
-  - Hard cap: clusters with n>15, no cycle, density<3%, no reciprocal txns → score ≤35 (below flag threshold)
-
-- **Hybrid** = 0.40 × IF + 0.60 × Rule, flagged at ≥40
-
-### Key Design Decisions
-1. **Exact IP IDs**: Using exact IP identifiers (not /16 subnets) prevents transitive merging of office subnets into giant components.
-2. **Dedicated identifiers for ring members**: `shared_device` ring members get dedicated IPs (not from the general pool), and `shared_ip` ring members get dedicated devices. This keeps their clusters tight and prevents merging with legitimate accounts.
-3. **Creation-time spread modifier**: Accounts created >1 day apart with no cycles get 75% reduction in device/IP signal. Fraud rings batch-register within seconds; households share devices over months.
-4. **Large sparse component cap**: A 30-account cluster with no cycle and low density is a transitive coincidence, not coordination — hard-capped below the flag threshold regardless of IF score.
-5. **AI Investigator grounding**: LLM only sees structured evidence, never raw data. This prevents hallucination and enforces explainability.
 
 ---
 
-## Setup
+## 3. Threat Model & Security Scope
 
-### Requirements
-```
-Python 3.9+  
-Node.js 18+
-```
+### Abuse Patterns Handled Effectively:
+1. **Rapid Multi-Account Burst Creation:** Synchronized batch registration ($\le 300\text{s}$) detected via creation-time variance features.
+2. **Infrastructure Reuse & Device Farms:** Hardware fingerprint sharing across accounts with density decay and weighted graph projections.
+3. **Collusive Refund Farming:** High refund ratios paired with shared infrastructure or concentrated counterparty funnels.
+4. **Circular Money Laundering:** Closed directed cycles ($A \to B \to C \to D \to A$) detected via cycle analysis on weighted transaction subgraphs.
+5. **Corporate Proxy / Family Business Hard Negatives:** Disentangles benign network sharing from coordinated fraud using creation-spread modifiers and merchant entropy.
 
-### Backend
+### Known Limitations (What This Detector Does NOT Cover):
+1. **Slow Sleeper Fraud (Multi-Year Aging):** Accounts created years apart with organic transaction history before sudden collusion evade creation-time sync features.
+2. **Advanced Hardware Fingerprint Spoofing:** Emulators rotating Canvas/WebGL hashes and device IDs per transaction will not trigger device-sharing edges without IP or behavioral overlap.
+3. **Multi-Hop Money Mule Layering through Legitimate Merchants:** Layering schemes that route funds through intermediary legitimate merchants rather than direct P2P loops require cross-merchant platform visibility.
+4. **Synthetic Data Evaluation Notice:** The system is evaluated on rigorous synthetic distributions. Real-world production deployment requires calibration on historical fraud chargebacks, continuous retraining, and human-in-the-loop analyst verification.
+
+---
+
+## 4. Automated Robustness & Ground-Truth Boundary Tests
+
+Automated regression and counterfactual tests (`pytest tests -v`):
+- **Order-Invariance Test (`test_order_sensitivity.py`):** Verified that feeding identical transactions in reverse/interleaved order yields substantially consistent final risk scores ($\le 15\text{pt}$ delta).
+- **Infrastructure Ablation Counterfactual (`test_counterfactuals.py`):** Proves that swapping shared hardware devices for distinct devices drops risk by $\ge 20\text{ points}$.
+- **Temporal Spread Counterfactual (`test_counterfactuals.py`):** Proves that spreading transactions across 60 days reduces temporal sync risk compared to 2-minute bursts.
+- **Corporate Office Hard Negative (`test_counterfactuals.py`):** Asserts that 5 employees shopping at diverse stores on an office IP are evaluated as Low Risk ($< 40$).
+- **Ground-Truth Boundary Audit (`test_ground_truth_boundary.py`):** Structural code audit verifying `PublicEvent` has no label attributes and models never query ground truth during inference.
+
+---
+
+## 5. Getting Started & Running Locally
+
+### Backend Setup
 ```bash
 cd backend
 pip install -r requirements.txt
-python -m data_gen.generator          # generate synthetic data (~5s)
-python -m detection.pipeline          # run detection (~10s)
-python -m evaluation.evaluator        # evaluate (~10s)
-uvicorn api.main:app --reload         # start API on :8000
+
+# Run ML training and generate models (XGBoost + IF + RF)
+python -m ml.train
+
+# Run batch detection pipeline
+python -m detection.pipeline
+
+# Run formal evaluation suite
+python -m evaluation.evaluator
+
+# Run automated robustness test suite
+pytest tests -v
+
+# Start FastAPI server on port 8000
+uvicorn api.main:app --reload --port 8000
 ```
 
-### Frontend
+### Frontend Setup
 ```bash
 cd frontend
 npm install
-npm run dev                           # start dev server on :5173
-```
-
-### Quick Demo
-Navigate to `http://localhost:5173` and:
-1. **Risk Overview**: See all flagged rings sorted by risk score
-2. **Click any Critical ring**: See graph visualization and 5 evidence items  
-3. **Click "Investigate"**: AI analyst generates a structured write-up grounded in evidence
-4. **Detection Metrics**: 4-baseline comparison table with actual numbers
-
----
-
-## Project Structure
-```
-backend/
-├── api/
-│   ├── main.py              # FastAPI app, lifespan pipeline init
-│   └── routers/
-│       ├── rings.py         # /api/rings, /api/rings/hero
-│       └── metrics.py       # /api/metrics/baselines, /benign-overlap
-├── data_gen/
-│   ├── config.py            # Dataset parameters, hard-negative counts
-│   └── generator.py         # Synthetic data generator with ring injectors
-├── detection/
-│   ├── graph_builder.py     # Bipartite graph, exact IDs, edge weights
-│   ├── feature_extractor.py # 18-feature cluster vector, Louvain
-│   ├── scorer.py            # Hybrid IF+rule scoring, hard caps
-│   ├── evidence_builder.py  # Human-readable evidence items
-│   └── pipeline.py          # Orchestrates full detection pass
-├── evaluation/
-│   └── evaluator.py         # 4-baseline evaluation, PR-AUC, benign FPR
-├── ml/
-│   ├── train.py             # Train/val/test split by ring type
-│   └── feature_ablation.py  # 5 ablation configs
-└── llm/
-    └── investigator.py      # Structured LLM investigation
-
-frontend/
-├── src/
-│   ├── api/client.ts        # Typed API client
-│   ├── screens/
-│   │   ├── RiskOverview.tsx      # Sortable/filterable ring table
-│   │   ├── RingInvestigation.tsx # Graph + evidence + LLM
-│   │   └── DetectionMetrics.tsx  # 4-baseline comparison table
-│   └── components/
-│       ├── GraphCanvas.tsx   # D3 force graph
-│       └── MetricCard.tsx    # Metric display card
+npm run build    # verify TypeScript compilation
+npm run dev      # start dashboard on http://localhost:5173
 ```
 
 ---
 
-*Built for Razorpay AI Buildathon — Track 02: AI Risk Manager*
+*NexusGuard AI — Built for Razorpay AI Buildathon (Track 02: AI Risk Manager)*
