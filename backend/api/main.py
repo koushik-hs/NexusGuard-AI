@@ -43,11 +43,18 @@ ACCOUNTS_PATH  = os.path.join(DATA_DIR, "accounts.csv")
 
 
 def _run_pipeline_if_needed():
-    """Auto-run data gen + detection + evaluation if outputs don't exist."""
+    """Auto-run data gen + model training + detection + evaluation if outputs don't exist."""
     if not os.path.exists(ACCOUNTS_PATH):
         print("[startup] No data found. Running synthetic data generator...")
         from data_gen.generator import generate
         generate()
+
+    xgb_path = os.path.join(DATA_DIR, "xgb_model.pkl")
+    if_path  = os.path.join(DATA_DIR, "if_model.pkl")
+    if not os.path.exists(xgb_path) or not os.path.exists(if_path):
+        print("[startup] ML models missing. Training XGBoost and Isolation Forest models...")
+        from ml.train import train_and_evaluate
+        train_and_evaluate()
 
     if not os.path.exists(RINGS_PATH):
         print("[startup] No rings.json found. Running detection pipeline...")
