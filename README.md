@@ -125,35 +125,60 @@ Automated regression and counterfactual tests (`pytest tests -v`):
 
 ---
 
-## 5. Getting Started & Running Locally
+## 5. Getting Started & Running Locally (100% Offline Compatible)
 
-### Backend Setup
+> [!NOTE]
+> **Zero External Dependencies / API Keys Required:** NexusGuard AI is designed to run completely offline. ML models (XGBoost, Isolation Forest) and the detection engine run locally. The GenAI investigation engine defaults to deterministic, hallucination-guarded template reports if no `OPENAI_API_KEY` is provided.
+
+### Prerequisites
+- **Python**: 3.9+ (`pip` installed)
+- **Node.js**: 18+ (`npm` installed)
+
+---
+
+### Quickstart (2 Terminals)
+
+#### Terminal 1 — Backend (FastAPI + Live Graph Engine + WebSocket)
 ```bash
 cd backend
 pip install -r requirements.txt
 
-# Run ML training and generate models (XGBoost + IF + RF)
-python -m ml.train
-
-# Run batch detection pipeline
-python -m detection.pipeline
-
-# Run formal evaluation suite
-python -m evaluation.evaluator
-
-# Run automated robustness test suite
-pytest tests -v
-
-# Start FastAPI server on port 8000
+# Start the server (auto-bootstraps data, trains models, and initializes live graph on first run)
 uvicorn api.main:app --reload --port 8000
 ```
+*Backend runs on: `http://localhost:8000` (API Docs: `http://localhost:8000/docs`)*
 
-### Frontend Setup
+#### Terminal 2 — Frontend (React 19 Dashboard)
 ```bash
 cd frontend
 npm install
-npm run build    # verify TypeScript compilation
-npm run dev      # start dashboard on http://localhost:5173
+npm run dev
+```
+*Dashboard runs on: `http://localhost:5173`*
+
+---
+
+### Verification & Testing Commands
+
+To independently execute each component or verify the detection metrics and robustness tests:
+
+```bash
+cd backend
+
+# 1. Run Automated Robustness & Ground-Truth Boundary Test Suite
+pytest tests -v
+
+# 2. Train Supervised XGBoost + Unsupervised Isolation Forest Models
+python -m ml.train
+
+# 3. Run Batch Graph Detection Pipeline
+python -m detection.pipeline
+
+# 4. Run Formal 5-Baseline Evaluation & Metric Generation
+python -m evaluation.evaluator
+
+# 5. Run Feature Ablation Study
+python -m ml.feature_ablation
 ```
 
 ---
